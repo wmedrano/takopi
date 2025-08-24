@@ -24,7 +24,9 @@
 (defvar takopi--plan-persona
   "You are an AI agent that plans.
 
-- Your objective is to fill in the todo list."
+- Your objective is to fill in the todo list.
+- When given a task, first present a plan.
+- Then call set_todos to set the todo list."
   "Persona prompt for the planning AI agent.")
 
 (defun takopi-plan (prompt)
@@ -32,10 +34,27 @@
 PROMPT is the planning request to send to the AI agent."
   (interactive "sPlanning prompt: ")
   (let ((agent (takopi-project)))
-    (setf (takopi-agent-persona agent) takopi--plan-persona)
+    (takopi-agent-reset agent takopi--plan-persona)
     (push (cons 'user prompt) (takopi-agent-messages agent))
     (display-buffer (takopi-agent-buffer agent))
-    (takopi-agent--run agent)))
+    (takopi-agent-run agent)))
+
+(defun takopi-project ()
+  "Get the agent, creating one if it doesn't already exist.
+
+An error is signaled if no project root can be determined."
+  (interactive)
+  (let* ((project (project-current))
+         (root    (and project (project-root project))))
+    (unless root (error "Unable to find project root at %s" default-directory))
+    (or (cl-loop for buffer in (buffer-list)
+                 when (with-current-buffer buffer
+                        (and (buffer-live-p buffer)
+                             takopi-active-agent
+                             (string-equal root (takopi-agent-root takopi-active-agent))))
+                 return takopi-active-agent)
+        (with-current-buffer (takopi--create-status-buffer (make-takopi-agent :root root))
+          takopi-active-agent))))
 
 (defun takopi-kill-all ()
   "Kill all takopi agents by closing their associated buffers."

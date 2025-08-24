@@ -16,7 +16,7 @@
 ;;; Code:
 
 (require 'cl-macs)
-(require 'xml)
+(require 'json)
 
 (cl-defstruct takopi-todo
   "A todo item for the Takopi AI agent.
@@ -33,38 +33,23 @@ Fields:
   (depends-on nil :type list)       ; list of todo IDs this depends on
   (description nil :type (or null string)))
 
-(defun takopi-todo-parse-xml (xml-string)
-  "Parse XML-STRING into a list of takopi-todo objects.
-Returns a list of takopi-todo structs parsed from the XML format."
-  (let* ((xml-data (with-temp-buffer
-                     (insert xml-string)
-                     (xml-parse-region (point-min) (point-max))))
-         (todos-root (car xml-data))
-         (todo-nodes (xml-get-children todos-root 'todo)))
-    (mapcar #'takopi-todo--parse-xml-node todo-nodes)))
+(defun takopi-todo-parse-json (json-string)
+  "Parse JSON-STRING into a list of takopi-todo objects.
+Returns a list of takopi-todo structs parsed from the JSON format."
+  (let* ((json-data (json-parse-string json-string :object-type 'alist))
+         (todos (alist-get 'todos json-data)))
+    (mapcar #'takopi-todo--parse-json-node todos)))
 
-(defun takopi-todo--parse-xml-node (node)
-  "Parse a single XML NODE into a takopi-todo object."
-  (let ((id-node (car (xml-get-children node 'id)))
-        (title-node (car (xml-get-children node 'title)))
-        (status-node (car (xml-get-children node 'status)))
-        (depends-on-node (car (xml-get-children node 'depends-on)))
-        (description-node (car (xml-get-children node 'description))))
+(defun takopi-todo--parse-json-node (node)
+  "Parse a single JSON NODE into a takopi-todo object."
+  (let ((depends-on (alist-get 'depends-on node)))
     (make-takopi-todo
-     :id (when id-node
-           (string-to-number (car (xml-node-children id-node))))
-     :title (if title-node
-                (car (xml-node-children title-node))
-              "")
-     :status (if status-node
-                 (intern (car (xml-node-children status-node)))
-               'pending)
-     :depends-on (when depends-on-node
-                   (mapcar (lambda (id-node)
-                             (string-to-number (car (xml-node-children id-node))))
-                           (xml-get-children depends-on-node 'id)))
-     :description (when description-node
-                    (car (xml-node-children description-node))))))
+     :id (alist-get 'id node)
+     :title (or (alist-get 'title node) "")
+     :status (intern (or (alist-get 'status node) "pending"))
+     :depends-on (unless (length= depends-on 0)
+                   (append depends-on nil))
+     :description (alist-get 'description node))))
 
 (provide 'takopi-todo)
 

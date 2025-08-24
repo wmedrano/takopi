@@ -3,38 +3,34 @@
 (require 'ert)
 (require 'takopi-todo)
 
-(ert-deftest takopi-todo-parse-xml-test ()
-  "Test parsing XML string into takopi-todo objects."
-  (let ((xml-string "
-<todos>
-  <todo>
-    <id>1</id>
-    <title>Implement user authentication</title>
-    <status>pending</status>
-    <depends-on></depends-on>
-    <description>Create login system</description>
-  </todo>
-  
-  <todo>
-    <id>2</id>
-    <title>Design database schema</title>
-    <status>in-progress</status>
-    <depends-on></depends-on>
-    <description>Define tables for users</description>
-  </todo>
-  
-  <todo>
-    <id>3</id>
-    <title>Create user registration</title>
-    <status>completed</status>
-    <depends-on>
-      <id>1</id>
-      <id>2</id>
-    </depends-on>
-    <description>Build frontend form</description>
-  </todo>
-</todos>"))
-    (let ((todos (takopi-todo-parse-xml xml-string)))
+(ert-deftest takopi-todo-parse-json-test ()
+  "Test parsing JSON string into takopi-todo objects."
+  (let ((json-string "{
+  \"todos\": [
+    {
+      \"id\": 1,
+      \"title\": \"Implement user authentication\",
+      \"status\": \"pending\",
+      \"depends-on\": [],
+      \"description\": \"Create login system\"
+    },
+    {
+      \"id\": 2,
+      \"title\": \"Design database schema\",
+      \"status\": \"in-progress\",
+      \"depends-on\": [],
+      \"description\": \"Define tables for users\"
+    },
+    {
+      \"id\": 3,
+      \"title\": \"Create user registration\",
+      \"status\": \"completed\",
+      \"depends-on\": [1, 2],
+      \"description\": \"Build frontend form\"
+    }
+  ]
+}"))
+    (let ((todos (takopi-todo-parse-json json-string)))
       ;; Should parse 3 todos
       (should (= (length todos) 3))
       
@@ -62,10 +58,10 @@
         (should (equal (takopi-todo-depends-on todo3) '(1 2)))
         (should (string= (takopi-todo-description todo3) "Build frontend form"))))))
 
-(ert-deftest takopi-todo-parse-xml-empty-test ()
-  "Test parsing empty XML string."
-  (let ((xml-string "<todos></todos>"))
-    (let ((todos (takopi-todo-parse-xml xml-string)))
+(ert-deftest takopi-todo-parse-json-empty-test ()
+  "Test parsing empty JSON string."
+  (let ((json-string "{\"todos\": []}"))
+    (let ((todos (takopi-todo-parse-json json-string)))
       (should (null todos)))))
 
 ;;; test-takopi-todo.el ends here

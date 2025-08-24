@@ -52,6 +52,12 @@ of the AI coding agent, including todos and project information."
   (setq-local revert-buffer-function #'takopi-agent--refresh-status-buffer)
   (takopi-agent--refresh-status-buffer))
 
+(defun takopi-agent-reset (agent persona)
+  "Reset the state of the AGENT and set PERSONA."
+  (setf (takopi-agent-persona agent) persona)
+  (setf (takopi-agent-todos agent) nil)
+  (setf (takopi-agent-messaes agent) nil))
+
 (defun takopi-agent--get-status-face (status)
   "Return the appropriate face for STATUS."
   (pcase status
@@ -64,10 +70,12 @@ of the AI coding agent, including todos and project information."
   "Format a single TODO item for display."
   (let ((status-face (takopi-agent--get-status-face (takopi-todo-status todo))))
     (concat
-     (format "[%s] "
+     (propertize (format "#%d " (takopi-todo-id todo))
+                 'face status-face)
+     (propertize (takopi-todo-title todo) 'face 'bold)
+     (format " [%s]"
              (propertize (symbol-name (takopi-todo-status todo))
                          'face status-face))
-     (propertize (takopi-todo-title todo) 'face 'bold)
      "\n"
      (when (takopi-todo-description todo)
        (format "  %s\n" (takopi-todo-description todo)))
@@ -83,21 +91,20 @@ of the AI coding agent, including todos and project information."
           (format "%d items\n" (length todos)))
   (when todos
     (insert "─────────────────\n")
-    (dolist (todo (reverse todos))
+    (dolist (todo todos)
       (insert (takopi-agent--format-todo todo))))
   (insert "\n"))
 
-(defun takopi-agent--set-todos (agent xml-todos)
-  "Set todos from XML-TODOS format in AGENT.
-Takes a single parameter which is todos in XML format.
+(defun takopi-agent--set-todos (agent json-todos)
+  "Set todos from JSON-TODOS format in AGENT.
+Takes a single parameter which is todos in JSON format.
 
-Uses `takopi-todo-parse-xml' to handle the actual parsing.  Returns nil
+Uses `takopi-todo-parse-json' to handle the actual parsing.  Returns nil
 on success, or an error string if an error occurs during parsing or
 insertion."
-  (setq wmedrano-debug xml-todos)
   (condition-case err
-      (let ((todos (takopi-todo-parse-xml xml-todos)))
-        (setf (takop-agent-todos agent) todos)
+      (let ((todos (takopi-todo-parse-json json-todos)))
+        (setf (takopi-agent-todos agent) todos)
         "Set todos!")
     (error
      ;; Return the error message as a string
@@ -170,59 +177,46 @@ and `takopi-active-agent' is set to AGENT."
                      (eq (buffer-local-value 'takopi-active-agent buffer) agent))
            return buffer))
 
-(defun takopi-project ()
-  "Create a new takopi-agent with root at the current project root.
-Returns a takopi-agent struct or signals an error if no project is detected."
-  (let ((project (project-current)))
-    (unless project
-      (error "No project detected, cannot create takopi-agent for project"))
-    (let ((agent (make-takopi-agent :root (project-root project))))
-      (takopi--create-status-buffer agent)
-      agent)))
-
 (defun takopi-agent--tool-set-todos (agent)
-  "Create an LLM tool for setting todos from XML for AGENT.
+  "Create an LLM tool for setting todos from JSON for AGENT.
 Returns a tool that can be used by the AI to set the complete todo list
-from XML format, replacing any existing todos."
+from JSON format, replacing any existing todos."
   (llm-make-tool
-   :function (lambda (xml-todos)
-               (takopi-agent--set-todos agent xml-todos))
+   :function (lambda (json-todos)
+               (takopi-agent--set-todos agent json-todos))
    :name "set_todos"
-   :description "Set todos from XML format. Example XML:
-<todos>
-  <todo>
-    <id>1</id>
-    <title>Implement user authentication</title>
-    <status>pending</status>
-    <depends-on></depends-on>
-    <description>Create login system</description>
-  </todo>
-
-  <todo>
-    <id>2</id>
-    <title>Design database schema</title>
-    <status>in-progress</status>
-    <depends-on></depends-on>
-    <description>Define tables for users</description>
-  </todo>
-
-  <todo>
-    <id>3</id>
-    <title>Create user registration</title>
-    <status>completed</status>
-    <depends-on>
-      <id>1</id>
-      <id>2</id>
-    </depends-on>
-    <description>Build frontend form</description>
-  </todo>
-</todos>"
-   :args '((:name "xml-todos"
+   :description "Set todos from JSON format. Example JSON:
+{
+  \"todos\": [
+    {
+      \"id\": 1,
+      \"title\": \"Implement user authentication\",
+      \"status\": \"pending\",
+      \"depends-on\": [],
+      \"description\": \"Create login system\"
+    },
+    {
+      \"id\": 2,
+      \"title\": \"Design database schema\",
+      \"status\": \"in-progress\",
+      \"depends-on\": [],
+      \"description\": \"Define tables for users\"
+    },
+    {
+      \"id\": 3,
+      \"title\": \"Create user registration\",
+      \"status\": \"completed\",
+      \"depends-on\": [1, 2],
+      \"description\": \"Build frontend form\"
+    }
+  ]
+}"
+   :args '((:name "json-todos"
                   :type string
-                  :description "XML string containing todos in the format shown in the description"))
+                  :description "JSON string containing todos in the format shown in the description"))
    :async nil))
 
-(defun takopi-agent--run (agent)
+(defun takopi-agent-run (agent)
   "Execute the AI agent conversation for AGENT.
 Processes the agent's messages and sends them to the configured LLM backend.
 Currently supports only single-message conversations.  Updates the agent's
