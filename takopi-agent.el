@@ -87,6 +87,22 @@ of the AI coding agent, including todos and project information."
       (insert (takopi-agent--format-todo todo))))
   (insert "\n"))
 
+(defun takopi-agent--set-todos (agent xml-todos)
+  "Set todos from XML-TODOS format in AGENT.
+Takes a single parameter which is todos in XML format.
+
+Uses `takopi-todo-parse-xml' to handle the actual parsing.  Returns nil
+on success, or an error string if an error occurs during parsing or
+insertion."
+  (setq wmedrano-debug xml-todos)
+  (condition-case err
+      (let ((todos (takopi-todo-parse-xml xml-todos)))
+        (setf (takop-agent-todos agent) todos)
+        "Set todos!")
+    (error
+     ;; Return the error message as a string
+     (format "Failed to set todos: %s" (error-message-string err)))))
+
 (defun takopi-agent--format-message-content (content)
   "Format message CONTENT for display."
   (pcase content
@@ -108,7 +124,7 @@ of the AI coding agent, including todos and project information."
     (dolist (msg messages)
       (let ((role (car msg))
             (content (cdr msg)))
-        (insert (propertize (format "[%s] " (upcase role))
+        (insert (propertize (format "[%s] " (upcase (symbol-name role)))
                             'face 'success)
                 (takopi-agent--format-message-content content)
                 "\n\n")))))
@@ -164,34 +180,46 @@ Returns a takopi-agent struct or signals an error if no project is detected."
       (takopi--create-status-buffer agent)
       agent)))
 
-(defun takopi-agent--tool-add-todo (agent)
-  "Create an LLM tool for adding todo items to AGENT.
-Returns a tool that can be used by the AI to add new todo items
-to the agent's todo list with id, title, status, and description."
+(defun takopi-agent--tool-set-todos (agent)
+  "Create an LLM tool for setting todos from XML for AGENT.
+Returns a tool that can be used by the AI to set the complete todo list
+from XML format, replacing any existing todos."
   (llm-make-tool
-   :function (lambda (id title status description)
-               (let ((todo (make-takopi-todo
-                            :id id
-                            :title title
-                            :status (intern status)
-                            :description description)))
-                 (setf (takopi-agent-todos agent)
-                       (cons todo (takopi-agent-todos agent)))
-                 (format "Added %s with id=%s" title id)))
-   :name "add_todo"
-   :description "Add a todo item"
-   :args '((:name "id"
+   :function (lambda (xml-todos)
+               (takopi-agent--set-todos agent xml-todos))
+   :name "set_todos"
+   :description "Set todos from XML format. Example XML:
+<todos>
+  <todo>
+    <id>1</id>
+    <title>Implement user authentication</title>
+    <status>pending</status>
+    <depends-on></depends-on>
+    <description>Create login system</description>
+  </todo>
+
+  <todo>
+    <id>2</id>
+    <title>Design database schema</title>
+    <status>in-progress</status>
+    <depends-on></depends-on>
+    <description>Define tables for users</description>
+  </todo>
+
+  <todo>
+    <id>3</id>
+    <title>Create user registration</title>
+    <status>completed</status>
+    <depends-on>
+      <id>1</id>
+      <id>2</id>
+    </depends-on>
+    <description>Build frontend form</description>
+  </todo>
+</todos>"
+   :args '((:name "xml-todos"
                   :type string
-                  :description "The unique identifier for the todo item")
-           (:name "title"
-                  :type string
-                  :description "The title of the todo item")
-           (:name "status"
-                  :type string
-                  :description "The status of the item")
-           (:name "description"
-                  :type string
-                  :description "The description of the todo item"))
+                  :description "XML string containing todos in the format shown in the description"))
    :async nil))
 
 (defun takopi-agent--run (agent)
@@ -204,7 +232,7 @@ messages with the response and refreshes the associated status buffer."
     (1 nil)
     (_ (error "Only one message is currently supported")))
   (let* ((content  (cdar (takopi-agent-messages agent)))
-         (tools    (list (takopi-agent--tool-add-todo agent)))
+         (tools    (list (takopi-agent--tool-set-todos agent)))
          (prompt   (llm-make-chat-prompt
                     content
                     :tools     tools
@@ -222,12 +250,12 @@ messages with the response and refreshes the associated status buffer."
 
 (defun takopi-agent--run-handle-response (agent response)
   "Handle RESPONSE from the AI by adding it to AGENT's messages."
-  (push (cons "assistant" response) (takopi-agent-messages agent))
+  (push (cons 'assistant response) (takopi-agent-messages agent))
   (with-current-buffer (takopi-agent-buffer agent) (revert-buffer)))
 
 (defun takopi-agent--run-handle-error (agent err)
   "Handle ERR from the AI by adding it to AGENT's messages."
-  (push err (takopi-agent-messages agent))
+  (push (cons 'error err) (takopi-agent-messages agent))
   (with-current-buffer (takopi-agent-buffer agent) (revert-buffer)))
 
 (provide 'takopi-agent)

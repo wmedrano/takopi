@@ -33,7 +33,7 @@ PROMPT is the planning request to send to the AI agent."
   (interactive "sPlanning prompt: ")
   (let ((agent (takopi-project)))
     (setf (takopi-agent-persona agent) takopi--plan-persona)
-    (push (cons "user" prompt) (takopi-agent-messages agent))
+    (push (cons 'user prompt) (takopi-agent-messages agent))
     (display-buffer (takopi-agent-buffer agent))
     (takopi-agent--run agent)))
 
