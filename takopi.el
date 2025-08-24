@@ -21,40 +21,50 @@
 (require 'takopi-todo)
 (require 'llm)
 
-(defvar takopi--plan-persona
-  "You are an AI agent that plans.
+(defvar takopi--plan-system-message
+  "You are a planning AI agent.
 
-- Your objective is to fill in the todo list.
-- When given a task, first present a plan.
-- Then call set_todos to set the todo list."
-  "Persona prompt for the planning AI agent.")
+- When given a task, you build a plan.
+- Once the plan is complete, you create a todo list."
+  "System message for the planning AI agent.")
 
 (defun takopi-plan (prompt)
   "Plan tasks using the AI agent to fill the todo list.
 PROMPT is the planning request to send to the AI agent."
   (interactive "sPlanning prompt: ")
-  (let ((agent (takopi-project)))
-    (takopi-agent-reset agent takopi--plan-persona)
-    (push (cons 'user prompt) (takopi-agent-messages agent))
-    (display-buffer (takopi-agent-buffer agent))
-    (takopi-agent-run agent)))
+  (takopi-agent-reset takopi-active-agent takopi--plan-system-message)
+  (push (cons 'user prompt) (takopi-agent-messages takopi-active-agent))
+  (takopi-agent-run))
+
+(defun takopi-retry ()
+  "Reissue the last request."
+  (interactive)
+  (let ((msgs (cl-member-if-not (lambda (role) (eq role 'assistant))
+                                (takopi-agent-messages takopi-active-agent)
+                                :key #'car)))
+    (setf (takopi-agent-messages takopi-active-agent) msgs)
+    (when takopi-active-agent (revert-buffer))
+    (takopi-agent-run)))
 
 (defun takopi-project ()
-  "Get the agent, creating one if it doesn't already exist.
+  "Get the buffer with the agent, creating one if it doesn't already exist.
 
 An error is signaled if no project root can be determined."
   (interactive)
   (let* ((project (project-current))
          (root    (and project (project-root project))))
     (unless root (error "Unable to find project root at %s" default-directory))
-    (or (cl-loop for buffer in (buffer-list)
-                 when (with-current-buffer buffer
-                        (and (buffer-live-p buffer)
-                             takopi-active-agent
-                             (string-equal root (takopi-agent-root takopi-active-agent))))
-                 return takopi-active-agent)
-        (with-current-buffer (takopi--create-status-buffer (make-takopi-agent :root root))
-          takopi-active-agent))))
+    (let ((buffer (or
+                   (cl-loop for buffer in (buffer-list)
+                            when (with-current-buffer buffer
+                                   (and (buffer-live-p buffer)
+                                        takopi-active-agent
+                                        (string-equal root (takopi-agent-root takopi-active-agent))))
+                            return buffer)
+                   (takopi-agent--create-buffer (make-takopi-agent :root root)))))
+      (when (called-interactively-p 'interactive)
+        (pop-to-buffer buffer))
+      buffer)))
 
 (defun takopi-kill-all ()
   "Kill all takopi agents by closing their associated buffers."
@@ -62,7 +72,7 @@ An error is signaled if no project root can be determined."
   (let ((killed-count 0))
     (cl-loop for buffer in (buffer-list)
              when (with-current-buffer buffer
-                    (eq major-mode 'takopi-agent-status-mode))
+                    (eq major-mode 'takopi-agent-mode))
              do (progn
                   (kill-buffer buffer)
                   (cl-incf killed-count)))

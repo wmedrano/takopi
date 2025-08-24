@@ -28,35 +28,37 @@
 
 Fields:
 
-- ROOT: Root directory path for the agent's workspace
+- ROOT: Root directory path for the agent's workspace.
 
-- TODOS: List of takopi-todo items managed by this agent
+- TODOS: List of takopi-todo items managed by this agent.
 
-- PERSONA: String describing the agent's persona or role
+- SYSTEM-MESSAGE: String describing the agent's role.
 
-- MESSAGES: List of messages between the human and AI agent.  The messages are ordered from latest to oldest."
+- MESSAGES: List of messages between the human and AI agent.  The
+  messages are ordered from latest to oldest."
   (root nil :type (or null string))
   (todos nil :type list)
-  (persona nil :type (or null string))
+  (system-message nil :type (or null string))
   (messages nil :type list))
 
 (defvar-local takopi-active-agent nil
   "The active takopi-agent for the current buffer.")
 
-(define-derived-mode takopi-agent-status-mode special-mode "Takopi"
+(define-derived-mode takopi-agent-mode special-mode "Takopi"
   "Major mode for displaying Takopi agent status.
 This mode is used for *takopi* buffers to display the current state
 of the AI coding agent, including todos and project information."
   (setq buffer-read-only t
         truncate-lines t)
-  (setq-local revert-buffer-function #'takopi-agent--refresh-status-buffer)
-  (takopi-agent--refresh-status-buffer))
+  (setq-local
+   revert-buffer-function #'takopi-agent-mode--revert-buffer)
+  (takopi-agent-mode--revert-buffer))
 
-(defun takopi-agent-reset (agent persona)
-  "Reset the state of the AGENT and set PERSONA."
-  (setf (takopi-agent-persona agent) persona)
+(defun takopi-agent-reset (agent system-message)
+  "Reset the state of the AGENT and set SYSTEM-MESSAGE."
+  (setf (takopi-agent-system-message agent) system-message)
   (setf (takopi-agent-todos agent) nil)
-  (setf (takopi-agent-messaes agent) nil))
+  (setf (takopi-agent-messages agent) nil))
 
 (defun takopi-agent--get-status-face (status)
   "Return the appropriate face for STATUS."
@@ -140,40 +142,48 @@ insertion."
   "Insert header information for AGENT."
   (insert (propertize "Project Root: " 'face 'bold)
           (or (takopi-agent-root agent) "None")
-          (propertize "\nPersona: " 'face 'bold)
-          (or (takopi-agent-persona agent) "None")
+          (propertize "\nSystem Message: " 'face 'bold)
+          (or (takopi-agent-system-message agent) "None")
           "\n\n"))
 
-(defun takopi-agent--refresh-status-buffer (&rest _)
+(defun takopi-agent-mode--revert-buffer (&rest _)
   "Refresh the contents of the takopi agent status buffer.
 Clears the buffer and redisplays the current state of `takopi-active-agent'.
 This function is used as the `revert-buffer-function' for takopi status buffers."
   (let ((inhibit-read-only t))
     (erase-buffer)
+    (unless (eq major-mode 'takopi-agent-mode)
+      (error "Buffer %s has major mode %s but expected %s"
+             (buffer-name)
+             major-mode
+             'takopi-agent-mode))
     (when takopi-active-agent
       (takopi-agent--insert-header takopi-active-agent)
       (takopi-agent--insert-todos (takopi-agent-todos takopi-active-agent))
       (takopi-agent--insert-messages (takopi-agent-messages takopi-active-agent))
       (goto-char (point-min)))))
 
-(defun takopi--create-status-buffer (agent)
-  "Create a *takopi* buffer with `takopi-agent-status-mode' and set the AGENT.
+(defun takopi-agent--create-buffer (agent)
+  "Create a *takopi* buffer with `takopi-agent-mode' and set the AGENT.
 Returns the created buffer."
+  (message "TOOD: Remove debug message. Created agent %s" agent)
   (let* ((default-directory (takopi-agent-root agent))
          (buffer (generate-new-buffer "*takopi*")))
     (with-current-buffer buffer
-      (takopi-agent-status-mode)
-      (setq takopi-active-agent agent))
+      (message "Set the active agent for %s to %s" (buffer-name) agent)
+      (takopi-agent-mode)
+      (setq-local takopi-active-agent agent)
+      (revert-buffer))
     buffer))
 
 (defun takopi-agent-buffer (agent)
   "Return the buffer associated with AGENT.
-Returns the first buffer where the major mode is `takopi-agent-status-mode'
+Returns the first buffer where the major mode is `takopi-agent-mode'
 and `takopi-active-agent' is set to AGENT."
   (cl-loop for buffer in (buffer-list)
            when (and (buffer-live-p buffer)
                      (with-current-buffer buffer
-                       (eq major-mode 'takopi-agent-status-mode))
+                       (eq major-mode 'takopi-agent-mode))
                      (eq (buffer-local-value 'takopi-active-agent buffer) agent))
            return buffer))
 
@@ -216,31 +226,35 @@ from JSON format, replacing any existing todos."
                   :description "JSON string containing todos in the format shown in the description"))
    :async nil))
 
-(defun takopi-agent-run (agent)
+(defun takopi-agent-run (&optional agent)
   "Execute the AI agent conversation for AGENT.
+
+If `agent' is not set, the the buffer's `takopi-active-agent' is used.
+
 Processes the agent's messages and sends them to the configured LLM backend.
 Currently supports only single-message conversations.  Updates the agent's
 messages with the response and refreshes the associated status buffer."
-  (pcase (length (takopi-agent-messages agent))
-    (0 (error "There must be at least one message"))
-    (1 nil)
-    (_ (error "Only one message is currently supported")))
-  (let* ((content  (cdar (takopi-agent-messages agent)))
-         (tools    (list (takopi-agent--tool-set-todos agent)))
-         (prompt   (llm-make-chat-prompt
-                    content
-                    :tools     tools
-                    :reasoning 'light))
-         (response-callback (lambda (response)
-                              (takopi-agent--run-handle-response agent response)))
-         (error-callback (lambda (_ err)
-                           (takopi-agent--run-handle-error agent err))))
-    (unless (stringp content)
-      (error "Failed to make string prompt and got %s" content))
-    (llm-chat-async takopi-backend
-                    prompt
-                    response-callback
-                    error-callback)))
+  (let ((agent (or agent takopi-active-agent)))
+    (pcase (length (takopi-agent-messages agent))
+      (0 (error "There must be at least one message"))
+      (1 nil)
+      (_ (error "Only one message is currently supported")))
+    (let* ((content  (cdar (takopi-agent-messages agent)))
+           (tools    (list (takopi-agent--tool-set-todos agent)))
+           (prompt   (llm-make-chat-prompt
+                      content
+                      :tools     tools
+                      :reasoning 'light))
+           (response-callback (lambda (response)
+                                (takopi-agent--run-handle-response agent response)))
+           (error-callback (lambda (_ err)
+                             (takopi-agent--run-handle-error agent err))))
+      (unless (stringp content)
+        (error "Failed to make string prompt and got %s" content))
+      (llm-chat-async takopi-backend
+                      prompt
+                      response-callback
+                      error-callback))))
 
 (defun takopi-agent--run-handle-response (agent response)
   "Handle RESPONSE from the AI by adding it to AGENT's messages."
