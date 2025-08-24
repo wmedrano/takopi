@@ -44,16 +44,6 @@ Fields:
 (defvar-local takopi-active-agent nil
   "The active takopi-agent for the current buffer.")
 
-(define-derived-mode takopi-agent-mode special-mode "Takopi"
-  "Major mode for displaying Takopi agent status.
-This mode is used for *takopi* buffers to display the current state
-of the AI coding agent, including todos and project information."
-  (setq buffer-read-only t
-        truncate-lines t)
-  (setq-local
-   revert-buffer-function #'takopi-agent-mode--revert-buffer)
-  (takopi-agent-mode--revert-buffer))
-
 (defun takopi-agent-reset (agent system-message)
   "Reset the state of the AGENT and set SYSTEM-MESSAGE."
   (setf (takopi-agent-system-message agent) system-message)
@@ -146,44 +136,15 @@ insertion."
           (or (takopi-agent-system-message agent) "None")
           "\n\n"))
 
-(defun takopi-agent-mode--revert-buffer (&rest _)
-  "Refresh the contents of the takopi agent status buffer.
-Clears the buffer and redisplays the current state of `takopi-active-agent'.
-This function is used as the `revert-buffer-function' for takopi status buffers."
-  (let ((inhibit-read-only t))
-    (erase-buffer)
-    (unless (eq major-mode 'takopi-agent-mode)
-      (error "Buffer %s has major mode %s but expected %s"
-             (buffer-name)
-             major-mode
-             'takopi-agent-mode))
-    (when takopi-active-agent
-      (takopi-agent--insert-header takopi-active-agent)
-      (takopi-agent--insert-todos (takopi-agent-todos takopi-active-agent))
-      (takopi-agent--insert-messages (takopi-agent-messages takopi-active-agent))
-      (goto-char (point-min)))))
-
-(defun takopi-agent--create-buffer (agent)
-  "Create a *takopi* buffer with `takopi-agent-mode' and set the AGENT.
-Returns the created buffer."
-  (message "TOOD: Remove debug message. Created agent %s" agent)
-  (let* ((default-directory (takopi-agent-root agent))
-         (buffer (generate-new-buffer "*takopi*")))
-    (with-current-buffer buffer
-      (message "Set the active agent for %s to %s" (buffer-name) agent)
-      (takopi-agent-mode)
-      (setq-local takopi-active-agent agent)
-      (revert-buffer))
-    buffer))
 
 (defun takopi-agent-buffer (agent)
   "Return the buffer associated with AGENT.
-Returns the first buffer where the major mode is `takopi-agent-mode'
+Returns the first buffer where the major mode is `takopi-mode'
 and `takopi-active-agent' is set to AGENT."
   (cl-loop for buffer in (buffer-list)
            when (and (buffer-live-p buffer)
                      (with-current-buffer buffer
-                       (eq major-mode 'takopi-agent-mode))
+                       (eq major-mode 'takopi-mode))
                      (eq (buffer-local-value 'takopi-active-agent buffer) agent))
            return buffer))
 
