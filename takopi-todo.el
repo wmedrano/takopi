@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: ai, coding, assistant, todo
-;; URL: https://github.com/your-username/takopi
+;; URL: https://github.com/wmedrano/takopi
 
 ;;; Commentary:
 
@@ -24,19 +24,13 @@ Fields:
 - ID: Unique numeric identifier for the todo item
 - TITLE: Short descriptive title of the task
 - STATUS: Current state (pending, in-progress, completed)
-- PRIORITY: Task importance level (low, medium, high)
 - DEPENDS-ON: List of todo IDs that must be completed first
-- DESCRIPTION: Optional detailed description of the task
-- CREATED-AT: ISO timestamp when the todo was created
-- COMPLETED-AT: ISO timestamp when the todo was completed"
+- DESCRIPTION: Optional detailed description of the task"
   (id nil :type (or null number))
   (title "" :type string)
   (status 'pending :type symbol)    ; pending, in-progress, completed
-  (priority 'medium :type symbol)   ; low, medium, high
   (depends-on nil :type list)       ; list of todo IDs this depends on
-  (description nil :type (or null string))
-  (created-at nil :type (or null string))
-  (completed-at nil :type (or null string)))
+  (description nil :type (or null string)))
 
 (provide 'takopi-todo)
 

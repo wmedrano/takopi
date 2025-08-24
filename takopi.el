@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: ai, coding, assistant
-;; URL: https://github.com/your-username/takopi
+;; URL: https://github.com/wmedrano/takopi
 
 ;;; Commentary:
 

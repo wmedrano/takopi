@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: ai, coding, assistant
-;; URL: https://github.com/your-username/takopi
+;; URL: https://github.com/wmedrano/takopi
 
 ;;; Commentary:
 
@@ -68,8 +68,6 @@ of the AI coding agent, including todos and project information."
              (propertize (symbol-name (takopi-todo-status todo))
                          'face status-face))
      (propertize (takopi-todo-title todo) 'face 'bold)
-     (when (takopi-todo-priority todo)
-       (format " (%s)" (symbol-name (takopi-todo-priority todo))))
      "\n"
      (when (takopi-todo-description todo)
        (format "  %s\n" (takopi-todo-description todo)))
