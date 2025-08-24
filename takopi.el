@@ -25,8 +25,14 @@
   "You are a planning AI agent.
 
 - When given a task, you build a plan.
-- Once the plan is complete, you create a todo list."
+- Once the plan is complete, you create a todo list.
+- Once the todo list is completed, you inform the user that the plan is ready."
   "System message for the planning AI agent.")
+
+(defvar takopi--system-message-presets (list takopi--plan-system-message)
+  "List of predefined system messages for takopi agents.
+These presets are available as completion options when setting
+a system message interactively.")
 
 (defun takopi-plan (prompt)
   "Plan tasks using the AI agent to fill the todo list.
@@ -77,6 +83,20 @@ An error is signaled if no project root can be determined."
                   (kill-buffer buffer)
                   (cl-incf killed-count)))
     (message "Killed %d takopi agent(s)" killed-count)))
+
+(defun takopi-system-message (system-message)
+  "Set the system message for the active takopi agent.
+SYSTEM-MESSAGE is the string to set as the agent's system message.
+If called interactively, prompts for the system message with preset options."
+  (interactive
+   (list (completing-read "System message: "
+                          takopi--system-message-presets
+                          nil nil nil nil
+                          (car takopi--system-message-presets))))
+  (unless takopi-active-agent
+    (error "No active takopi agent found"))
+  (setf (takopi-agent-system-message takopi-active-agent) system-message)
+  (message "System message set"))
 
 (provide 'takopi)
 
