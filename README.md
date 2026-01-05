@@ -98,7 +98,6 @@ Takopi consists of three main components:
 
 - **takopi.el**: Main entry point, status mode, and high-level commands
 - **takopi-session.el**: Session management, storage, and rendering
-- **takopi-tools.el**: LLM tool definitions and diff application logic
 
 The package uses the `llm` library to communicate with various LLM providers (Gemini, OpenAI, Claude, etc.).
 

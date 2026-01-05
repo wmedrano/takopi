@@ -9,11 +9,8 @@
 (require 'cl-lib)
 (require 'llm)
 (require 'llm-gemini)
-(require 'takopi-tools)
+(require 'flymake)
 (require 'takopi-session)
-
-(defvar takopi-llm-provider nil
-  "The LLM provider to use for takopi operations.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; takopi-status-mode
@@ -63,11 +60,35 @@
            (match-string 1 lang))
           (t lang))))
 
+(defmacro takopi--with-temp-buffer-string (&rest body)
+  "Create a temporary buffer, evaluate BODY, and return the buffer's contents.
+This is a convenience macro for capturing buffer content after transformations."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     ,@body
+     (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun takopi--insert-buffer (buffer &optional show-lines)
+  "Insert the contents of BUFFER into the current buffer.
+If SHOW-LINES is non-nil, prefix each line with its line number."
+  (let ((start   (point))
+        (content (with-current-buffer buffer
+                   (buffer-substring-no-properties (point-min) (point-max)))))
+    (insert content)
+    (when show-lines
+      (let ((line-num 1)
+            (end (point)))
+        (goto-char start)
+        (while (< (point) end)
+          (insert (format "%4d | " line-num))
+          (forward-line 1)
+          (setq line-num (1+ line-num)))
+        (goto-char end)))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Actions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;; takopi--todo-prompt
 (defun takopi--todo-prompt (buffer)
   "Generate the system prompt for resolving TODOAI items in BUFFER."
   (format "You are an expert software developer.
@@ -101,6 +122,49 @@ Instructions:
                            (takopi--make-tool-edit-buffer buffer)))))
     (let ((id (takopi-session-register session)))
       (message "Takopi session started: %s" id))
+    (takopi-session-execute-request session)))
+
+
+(defun takopi--flymake-prompt (buffer)
+  "Generate the system prompt for fixing Flymake errors in BUFFER."
+  (let* ((diagnostics (with-current-buffer buffer
+                        (unless (bound-and-true-p flymake-mode)
+                          (user-error "Flymake mode is not enabled in this buffer"))
+                        (flymake-diagnostics))))
+    (unless diagnostics
+      (user-error "No Flymake diagnostics found in %s" (buffer-name buffer)))
+    (takopi--with-temp-buffer-string
+      (insert "You are an expert software developer.
+Your task is to fix the following errors in the provided code.
+
+Errors:
+")
+      (cl-loop for d in diagnostics
+               do (let* ((line (with-current-buffer buffer
+                                 (line-number-at-pos (flymake-diagnostic-beg d))))
+                         (text (flymake-diagnostic-text d)))
+                    (insert "- Line " (format "%d" line) ": " text "\n")))
+      (insert "\n#+BEGIN_SRC " (takopi--get-major-mode-name buffer) "\n")
+      (insert (takopi--insert-buffer buffer t))
+      (insert "#+END_SRC\n\n")
+      (insert "Instructions:
+1. Analyze the errors and the surrounding code.
+2. Use the 'apply_diff' tool to provide fixes for the errors.
+3. Maintain the coding style of the file."))))
+
+(defun takopi-fix-flymake-errors ()
+  "Process all Flymake diagnostics in the current buffer using an LLM."
+  (interactive)
+  (unless takopi-llm-provider
+    (user-error "Please set `takopi-llm-provider` first"))
+  (let* ((buffer (current-buffer))
+         (prompt (takopi--flymake-prompt buffer))
+         (session (make-takopi-session
+                   :task (format "Fix Flymake errors in %s" (buffer-name buffer))
+                   :chat (list prompt)
+                   :tools (list (takopi--make-tool-edit-buffer buffer)))))
+    (let ((id (takopi-session-register session)))
+      (message "Takopi Flymake fix session started: %s" id))
     (takopi-session-execute-request session)))
 
 (provide 'takopi)

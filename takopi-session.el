@@ -1,4 +1,4 @@
-;;; takopi-tools.el --- LLM tools for takopi -*- lexical-binding: t; -*-
+;;; takopi-session.el --- Session management for Takopi -*- lexical-binding: t; -*-
 ;;; Author: Will S. Medrano
 ;;; Keywords: tools, ai, llm
 ;;; Version: 0.1.0
@@ -10,7 +10,8 @@
 
 (defcustom takopi-thinking 'none
   "The thinking to use for LLM requests.
-Options depend on the provider, common values are 'none, 'light, 'medium, and 'maximum."
+Options depend on the provider, common values are `none', `light',
+`medium', and `maximum'."
   :type '(choice (const :tag "None" none)
                  (const :tag "Light" light)
                  (const :tag "Medium" medium)
@@ -29,7 +30,7 @@ Options depend on the provider, common values are 'none, 'light, 'medium, and 'm
 
 (defun takopi-session-set-thinking (style)
   "Set the `takopi-thinking' to STYLE.
-STYLE should be one of 'none, 'light, 'medium, or 'maximum."
+STYLE should be one of `none', `light', `medium', or `maximum'."
   (interactive
    (list (intern (completing-read "Select thinking "
                                   '("none" "light" "medium" "maximum")))))
@@ -72,6 +73,9 @@ STYLE should be one of 'none, 'light, 'medium, or 'maximum."
                         count t)))
     (message "Cancelled %d active session(s)." count)))
 
+(defvar takopi-llm-provider nil
+  "The LLM provider to use for takopi.")
+
 (defun takopi-session-execute-request (session)
   "Execute the LLM request for SESSION."
   (let ((response-fn (lambda (res)
@@ -107,7 +111,7 @@ STYLE should be one of 'none, 'light, 'medium, or 'maximum."
 (defun takopi--session-to-prompt (session)
   "Convert a SESSION into an `llm-chat-prompt`."
   (let* ((tool-fns (takopi-session-tools session))
-         (tools    (mapcar (lambda (t) (funcall t session))
+         (tools    (mapcar (lambda (tool-fn) (funcall tool-fn session))
                            tool-fns)))
     (llm-make-chat-prompt (takopi-session-chat session)
                           :tools tools
@@ -142,7 +146,6 @@ STYLE should be one of 'none, 'light, 'medium, or 'maximum."
 
 (defun takopi--render-message (message idx)
   "Render a MESSAGE at index IDX into the current buffer."
-  (setq wmedrano-debug message)
   (let ((role (if (cl-evenp idx) "User" "Takopi")))
     (insert
      "*** " role " (" (format "%d" idx) ")"
@@ -172,6 +175,116 @@ If called interactively, prompt for a session from `takopi-sessions`."
       (setq-local takopi--session session)
       (takopi--render-session session))
     (pop-to-buffer buffer)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Tools
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(cl-defstruct takopi-tool-result
+  "Result of a takopi tool execution."
+  status format content)
+
+(defun takopi-result-format (result)
+  "Format the tool RESULT for display."
+  (cond
+   ((stringp result) result)
+   ((takopi-tool-result-p result)
+    (takopi--format-tool-result result))
+   ((and (listp result) (cdr result) (not (listp (cdr result))))
+    (format "%s\n\n%s" (takopi-result-format (car result))
+            (takopi-result-format (cdr result))))
+   ((listp result)
+    (mapconcat #'takopi-result-format result "\n\n"))
+   (t (format "%s" result))))
+
+(defun takopi--format-tool-result (result)
+  "Format a single tool RESULT."
+  (let ((fmt (takopi-tool-result-format result)))
+    (if (or (string-equal fmt "org") (eq fmt 'org))
+        (takopi-tool-result-content result)
+      (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
+              fmt
+              (takopi-tool-result-content result)))))
+
+(defun takopi--format-diff (before after)
+  "Format a diff string from BEFORE and AFTER."
+  (let ((file-before (make-temp-file "takopi-tool-before-"))
+        (file-after (make-temp-file "takopi-tool-after-")))
+    (unwind-protect
+        (progn
+          (write-region before nil file-before nil 'silent)
+          (write-region after nil file-after nil 'silent)
+          (with-temp-buffer
+            (call-process "diff" nil t nil
+                          "-u" "--label" "before" "--label" "after"
+                          file-before file-after)
+            (buffer-string)))
+      (ignore-errors (delete-file file-before))
+      (ignore-errors (delete-file file-after)))))
+
+(defun takopi--apply-diff-to-buffer (buffer before after)
+  "Apply a transformation to BUFFER by replacing BEFORE with AFTER."
+  (with-current-buffer buffer
+    (save-excursion
+      (let ((matches 0)
+            match-pos)
+        (goto-char (point-min))
+        (while (search-forward before nil t)
+          (setq matches (1+ matches))
+          (setq match-pos (match-beginning 0)))
+        (cond
+         ((= matches 0)
+          (make-takopi-tool-result
+           :status 'error
+           :format 'text
+           :content "Could not find text to replace"))
+         ((> matches 1)
+          (make-takopi-tool-result
+           :status 'error
+           :format 'text
+           :content (format "Found %d matches for text to replace; must be unique"
+                            matches)))
+         (t
+          (let ((old-content (buffer-substring-no-properties (point-min) (point-max))))
+            (goto-char match-pos)
+            (search-forward before)
+            (replace-match after t t)
+            (make-takopi-tool-result
+             :status 'success
+             :format 'diff
+             :content (takopi--format-diff
+                       old-content
+                       (buffer-substring-no-properties (point-min) (point-max)))))))))))
+
+(defun takopi--make-tool-edit-buffer (buffer)
+  "Create an LLM tool to apply text replacements in BUFFER."
+  (lambda (_)
+    (llm-make-tool :function (lambda (before after)
+                               (takopi--apply-diff-to-buffer buffer before after))
+                   :name "apply_diff"
+                   :description "Apply a diff to edit the file. Treat this similar to applying a diff patch."
+                   :args '((:name "before"
+                                  :type string
+                                  :description "The string to remove.")
+                           (:name "after"
+                                  :type string
+                                  :description "The string to insert.")))))
+
+(defun takopi--tool-update-task (session)
+  "Create an LLM tool to update the task in SESSION."
+  (let ((description-base
+         "Update the session task."))
+    (llm-make-tool :function (lambda (task)
+                               (let ((old-task (takopi-session-task session)))
+                                 (setf (takopi-session-task session) task)
+                                 (format "Task updated from %s to %s" old-task task)))
+                   :name "update_task"
+                   :description (format "%s\nCurrent task is: %s"
+                                        description-base
+                                        (takopi-session-task session))
+                   :args '((:name "task"
+                                  :type string
+                                  :description "The new task description.")))))
 
 
 (provide 'takopi-session)
