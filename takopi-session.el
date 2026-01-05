@@ -41,6 +41,9 @@ STYLE should be one of `none', `light', `medium', or `maximum'."
 (defvar takopi-sessions nil
   "An association list of active sessions.")
 
+(defvar-local takopi--session nil
+  "The takopi session associated with the current buffer.")
+
 (defun takopi-session-clear ()
   "Clear all active takopi sessions."
   (interactive)
@@ -103,17 +106,25 @@ STYLE should be one of `none', `light', `medium', or `maximum'."
            (selection (completing-read prompt choices nil t)))
       (cdr (assoc selection choices)))))
 
+
 (defun takopi-session-append-to-chat (session message)
   "Append MESSAGE to the chat history of SESSION."
   (setf (takopi-session-chat session)
-        (append (takopi-session-chat session) (list message))))
+        (append (takopi-session-chat session) (list message)))
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'takopi-session-mode)
+                 (eq takopi--session session))
+        (revert-buffer t t)))))
 
 (defun takopi--session-to-prompt (session)
   "Convert a SESSION into an `llm-chat-prompt`."
   (let* ((tool-fns (takopi-session-tools session))
          (tools    (mapcar (lambda (tool-fn) (funcall tool-fn session))
-                           tool-fns)))
-    (llm-make-chat-prompt (takopi-session-chat session)
+                           tool-fns))
+         (content  (mapcar #'takopi-result-format
+                           (takopi-session-chat session))))
+    (llm-make-chat-prompt content
                           :tools tools
                           :reasoning takopi-thinking)))
 
@@ -122,19 +133,56 @@ STYLE should be one of `none', `light', `medium', or `maximum'."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar-keymap takopi-session-mode-map
-  :doc "Keymap for `takopi-session-mode'.")
+  :doc "Keymap for `takopi-session-mode'."
+  "C-c C-c" #'takopi-session-compose
+  "C-c C-k" #'takopi-session-quit
+  "C-c C-a" #'takopi-session-continue)
+
+
+(defun takopi-session-continue ()
+  "Append \"continue\" to the chat and execute the request.
+This is useful for prompting the LLM to continue a truncated response."
+  (interactive)
+  (unless takopi--session
+    (user-error "No session associated with this buffer"))
+  (takopi-session-append-to-chat takopi--session "continue")
+  (takopi-session-execute-request takopi--session)
+  (message "Sent 'continue' to session."))
+
+(defun takopi-session-quit ()
+  "Cancel session's active request and cleanup.
+This kills the buffer and removes the session from `takopi-sessions`."
+  (interactive)
+  (let ((session takopi--session))
+    (when session
+      (takopi-session-cancel session)
+      (setq takopi-sessions
+            (cl-delete session takopi-sessions :key #'cdr)))
+    (kill-buffer-and-window)))
 
 (define-derived-mode takopi-session-mode org-mode "Takopi Session"
   "Major mode for displaying takopi sessions with syntax highlighting."
+  (setq-local header-line-format
+              (substitute-command-keys
+               (concat
+                (propertize " Takopi Session" 'face 'mode-line-emphasis)
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-session-compose]: compose"
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-session-continue]: continue"
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-session-quit]: quit"
+                (propertize " • " 'face 'shadow)
+                "\\[revert-buffer]: refresh" )))
   (setq-local revert-buffer-function #'takopi--revert-session-buffer))
 
-(defvar-local takopi--session nil
-  "The takopi session associated with the current buffer.")
 
 (defun takopi--revert-session-buffer (&rest _)
   "Internal function to refresh the session buffer."
   (when takopi--session
-    (takopi-show-session takopi--session)))
+    (let ((pos (point)))
+      (takopi-show-session takopi--session)
+      (goto-char pos))))
 
 (defun takopi--render-tool (tool)
   "Render a TOOL into the current buffer."
@@ -164,7 +212,8 @@ STYLE should be one of `none', `light', `medium', or `maximum'."
     (insert "** Tools\n\n")
     (dolist (tool-fn (takopi-session-tools session))
       (takopi--render-tool (funcall tool-fn session)))
-    (takopi-session-mode)))
+    (takopi-session-mode)
+    (setq-local takopi--session session)))
 
 (defun takopi-show-session (session)
   "Open a buffer displaying the details of SESSION.
@@ -172,9 +221,73 @@ If called interactively, prompt for a session from `takopi-sessions`."
   (interactive (list (takopi--read-session "Select takopi session: ")))
   (let ((buffer (get-buffer-create "*takopi-session*")))
     (with-current-buffer buffer
-      (setq-local takopi--session session)
       (takopi--render-session session))
     (pop-to-buffer buffer)))
+
+(defun takopi-session-compose ()
+  "Open a new `takopi-compose-mode' buffer for the current or selected session."
+  (interactive)
+  (unless (derived-mode-p 'takopi-session-mode)
+    (user-error "Command must be called from a takopi-session-mode buffer"))
+  (let ((session takopi--session)
+        (buffer (get-buffer-create "*takopi-compose*")))
+    (with-current-buffer buffer
+      (takopi-compose-mode)
+      (setq-local takopi--session session)
+      (erase-buffer))
+    (pop-to-buffer buffer)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Respond
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defvar takopi-compose-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'takopi-compose-send)
+    (define-key map (kbd "C-c C-k") #'takopi-compose-cancel)
+    (define-key map (kbd "C-c C-v") #'takopi-show-this-session)
+    map)
+  "Keymap for `takopi-compose-mode'.")
+
+(defun takopi-show-this-session ()
+  "Show the session associated with the current buffer."
+  (interactive)
+  (if takopi--session
+      (takopi-show-session takopi--session)
+    (user-error "No session associated with this buffer")))
+
+(defun takopi-compose-cancel ()
+  "Cancel the current chat message and the session's active request."
+  (interactive)
+  (kill-buffer-and-window)
+  (message "Chat cancelled."))
+
+(defun takopi-compose-send ()
+  "Send the current buffer's message to the LLM session."
+  (interactive)
+  (delete-trailing-whitespace)
+  (let ((message (buffer-string))
+        (session takopi--session))
+    (when (string-blank-p message)
+      (user-error "Message cannot be empty"))
+    (unless session
+      (user-error "No takopi session associated with this buffer"))
+    (takopi-session-append-to-chat session message)
+    (takopi-session-execute-request session)
+    (kill-buffer-and-window)))
+
+(define-derived-mode takopi-compose-mode org-mode "takopi-compose"
+  "Major mode for creating a chat message.
+\\{takopi-compose-mode-map}"
+  (setq-local header-line-format
+              (substitute-command-keys
+               (concat
+                (propertize " Takopi Chat" 'face 'mode-line-emphasis)
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-compose-send]: send"
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-show-this-session]: view"
+                (propertize " • " 'face 'shadow)
+                "\\[takopi-compose-cancel]: cancel"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Tools
@@ -206,17 +319,20 @@ If called interactively, prompt for a session from `takopi-sessions`."
               fmt
               (takopi-tool-result-content result)))))
 
-(defun takopi--format-diff (before after)
-  "Format a diff string from BEFORE and AFTER."
+(defun takopi--format-diff (before after &optional filename)
+  "Format a diff string from BEFORE and AFTER for FILENAME."
   (let ((file-before (make-temp-file "takopi-tool-before-"))
-        (file-after (make-temp-file "takopi-tool-after-")))
+        (file-after (make-temp-file "takopi-tool-after-"))
+        (filename (or filename "file")))
     (unwind-protect
         (progn
           (write-region before nil file-before nil 'silent)
           (write-region after nil file-after nil 'silent)
           (with-temp-buffer
             (call-process "diff" nil t nil
-                          "-u" "--label" "before" "--label" "after"
+                          "-u"
+                          "--label" (concat "a/" filename)
+                          "--label" (concat "b/" filename)
                           file-before file-after)
             (buffer-string)))
       (ignore-errors (delete-file file-before))
@@ -237,13 +353,13 @@ If called interactively, prompt for a session from `takopi-sessions`."
           (make-takopi-tool-result
            :status 'error
            :format 'text
-           :content "Could not find text to replace"))
+           :content (format "Could not find text to replace:\n%s" before)))
          ((> matches 1)
           (make-takopi-tool-result
            :status 'error
            :format 'text
-           :content (format "Found %d matches for text to replace; must be unique"
-                            matches)))
+           :content (format "Found %d matches for text to replace; must be unique. Text:\n%s"
+                            matches before)))
          (t
           (let ((old-content (buffer-substring-no-properties (point-min) (point-max))))
             (goto-char match-pos)
@@ -254,7 +370,9 @@ If called interactively, prompt for a session from `takopi-sessions`."
              :format 'diff
              :content (takopi--format-diff
                        old-content
-                       (buffer-substring-no-properties (point-min) (point-max)))))))))))
+                       (buffer-substring-no-properties (point-min)
+                                                       (point-max))
+                       (buffer-name buffer))))))))))
 
 (defun takopi--make-tool-edit-buffer (buffer)
   "Create an LLM tool to apply text replacements in BUFFER."
@@ -285,6 +403,7 @@ If called interactively, prompt for a session from `takopi-sessions`."
                    :args '((:name "task"
                                   :type string
                                   :description "The new task description.")))))
+
 
 
 (provide 'takopi-session)
